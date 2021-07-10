@@ -64,6 +64,8 @@ VECTOR v_light_dir   = {  0,   0,   1,  1 };
 #define NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_YB8CR8YA8CB8    0x25
 #define NV097_SET_TEXTURE_FORMAT_COLOR_D16                      0x2C    // TODO: proper nvidia name
 #define NV097_SET_TEXTURE_FORMAT_COLOR_LIN_F16                  0x31    // TODO: proper nvidia name
+#define NV097_SET_CONTROL0_COLOR_SPACE_CONVERT                  0xF0000000
+#define NV097_SET_CONTROL0_COLOR_SPACE_CONVERT_CRYCB_TO_RGB     0x1
 
 static void matrix_viewport(float out[4][4], float x, float y, float width, float height, float z_min, float z_max);
 static void init_shader(void);
