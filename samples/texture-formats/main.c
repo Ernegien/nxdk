@@ -103,7 +103,7 @@ static const TextureFormatInfo format_map[] = {
     // U0 and V0 is the color of both pixels. (second pixel is the one sampled? or averaged? doesn't really matter here)
     // https://docs.microsoft.com/en-us/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering#converting-8-bit-yuv-to-rgb888
     { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_CR8YB8CB8YA8, 2, false, true, "YUY2" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_YB8CR8YA8CB8, 2, false, true, "UYVY" }, // TODO: implement in xemu
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_YB8CR8YA8CB8, 2, false, true, "UYVY" }, // TODO: implement in xemu
 
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_Y16, false, true, "Y16" },
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_Y8, true, true, "SZ_Y8" },
@@ -118,7 +118,7 @@ static const TextureFormatInfo format_map[] = {
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT23_A8R8G8B8, false, true, "DXT3" },
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT45_A8R8G8B8, false, true, "DXT5" },
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_G8B8, true, true, "SZ_G8B8" },
-    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_G8B8, false, true, "G8B8" },    // TODO: implement in xemu
+    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_G8B8, 2, false, true, "G8B8" },
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_D16, false, true, "D16" },    // TODO: implement in xemu
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LIN_F16, false, true, "LIN_F16" },    // TODO: implement in xemu
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R8B8, true, true, "SZ_R8B8" },
@@ -426,8 +426,10 @@ static int update_texture_memory(void *texMem, TextureFormatInfo format, int wid
                     dstP[3] = (0.257f * R1) + (0.504f * G1) + (0.098f * B1) + 16;    // Y1
                     dstP += 4;
                 }
-            break;
-
+                break;
+            case NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_G8B8:
+                    // TODO: for now, just let default gradient happen
+                break;
             default:
                 SDL_FreeSurface(gradient_surf);
                 return 3;
