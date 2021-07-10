@@ -102,8 +102,8 @@ static const TextureFormatInfo format_map[] = {
     // Y0 is the brightness of pixel 0, Y1 the brightness of pixel 1.
     // U0 and V0 is the color of both pixels. (second pixel is the one sampled? or averaged? doesn't really matter here)
     // https://docs.microsoft.com/en-us/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering#converting-8-bit-yuv-to-rgb888
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_CR8YB8CB8YA8, 2, false, true, "YUY2" },
-    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_YB8CR8YA8CB8, 2, false, true, "UYVY" }, // TODO: implement in xemu
+    { SDL_PIXELFORMAT_BGRA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_CR8YB8CB8YA8, 2, false, true, "YUY2" },
+    { SDL_PIXELFORMAT_BGRA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_YB8CR8YA8CB8, 2, false, true, "UYVY" },
 
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_Y16, false, true, "Y16" },
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_Y8, true, true, "SZ_Y8" },
@@ -242,6 +242,13 @@ int main(void)
         // Set the alpha blend source (s) and destination (d) factors
         p = pb_push1(p, NV097_SET_BLEND_FUNC_SFACTOR, NV097_SET_BLEND_FUNC_SFACTOR_V_SRC_ALPHA);
         p = pb_push1(p, NV097_SET_BLEND_FUNC_DFACTOR, NV097_SET_BLEND_FUNC_SFACTOR_V_ONE_MINUS_SRC_ALPHA);
+
+        // yuv requires color space conversion
+        if (format_map[format_map_index].XboxFormat == NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_CR8YB8CB8YA8 ||
+            format_map[format_map_index].XboxFormat == NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_YB8CR8YA8CB8) {
+            p = pb_push1(p, NV097_SET_CONTROL0,
+                MASK(NV097_SET_CONTROL0_COLOR_SPACE_CONVERT, NV097_SET_CONTROL0_COLOR_SPACE_CONVERT_CRYCB_TO_RGB));
+        }
 
         DWORD format_mask = MASK(NV097_SET_TEXTURE_FORMAT_CONTEXT_DMA, 1) |
             MASK(NV097_SET_TEXTURE_FORMAT_CUBEMAP_ENABLE, 0) |
