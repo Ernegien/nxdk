@@ -20,13 +20,14 @@
 #include <SDL_image.h>
 #include "swizzle.h"
 
-typedef struct FormatInfo {
+typedef struct TextureFormatInfo {
     SDL_PixelFormatEnum SdlFormat;
     uint32_t XboxFormat;
+    uint16_t XboxBpp;   // bytes per pixel
     bool XboxSwizzled;
     bool RequireConversion;
     char* Name;
-} FormatInfo;
+} TextureFormatInfo;
 
 #pragma pack(1)
 typedef struct Vertex {
@@ -43,8 +44,6 @@ static uint32_t  num_vertices;
 
 MATRIX m_model, m_view, m_proj;
 
-VECTOR v_obj_pos     = {  0,   0,   0,  1 };
-VECTOR v_obj_rot     = {  0,   0,   0,  1 };
 VECTOR v_cam_pos     = {  0,   0.05,   1.07,  1 };
 VECTOR v_cam_rot     = {  0,   0,   0,  1 };
 VECTOR v_light_dir   = {  0,   0,   1,  1 };
@@ -53,15 +52,6 @@ VECTOR v_light_dir   = {  0,   0,   1,  1 };
 #include "texture.h"
 
 #define MASK(mask, val) (((val) << (ffs(mask)-1)) & (mask))
-
-static struct {
-    uint16_t width;
-    uint16_t height;
-    uint16_t pitch;
-    void     *addr;
-    int      error;
-} texture;
-
 #define MAXRAM 0x03FFAFFF
 
 // TODO: upstream missing nv2a defines
@@ -80,55 +70,60 @@ static void init_shader(void);
 static void init_textures(void);
 static void set_attrib_pointer(unsigned int index, unsigned int format, unsigned int size, unsigned int stride, const void* data);
 static void draw_arrays(unsigned int mode, int start, int count);
+static int update_texture_memory(void* texMem, TextureFormatInfo format, int width, int height);
 
-static int format_map_index = 0;
-static const FormatInfo format_map[] = {
+static const TextureFormatInfo format_map[] = {
 
     // swizzled
-    { SDL_PIXELFORMAT_ABGR8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8B8G8R8, true, false, "A8B8G8R8" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R8G8B8A8, true, false, "R8G8B8A8" },
-    { SDL_PIXELFORMAT_ARGB8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8R8G8B8, true, false, "A8R8G8B8" },
-    { SDL_PIXELFORMAT_ARGB8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_X8R8G8B8, true, false, "X8R8G8B8" },
-    { SDL_PIXELFORMAT_BGRA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_B8G8R8A8, true, false, "B8G8R8A8" },
-    { SDL_PIXELFORMAT_RGB565, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R5G6B5, true, false, "R5G6B5" },
-    { SDL_PIXELFORMAT_ARGB1555, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A1R5G5B5, true, false, "A1R5G5B5" },
-    { SDL_PIXELFORMAT_ARGB1555, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_X1R5G5B5, true, false, "X1R5G5B5" },
-    { SDL_PIXELFORMAT_ARGB4444, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A4R4G4B4, true, false, "A4R4G4B4" }, 
+    { SDL_PIXELFORMAT_ABGR8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8B8G8R8, 4, true, false, "A8B8G8R8" },
+    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R8G8B8A8, 4, true, false, "R8G8B8A8" },
+    { SDL_PIXELFORMAT_ARGB8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8R8G8B8, 4, true, false, "A8R8G8B8" },
+    { SDL_PIXELFORMAT_ARGB8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_X8R8G8B8, 4, true, false, "X8R8G8B8" },
+    { SDL_PIXELFORMAT_BGRA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_B8G8R8A8, 4, true, false, "B8G8R8A8" },
+    { SDL_PIXELFORMAT_RGB565, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R5G6B5, 2, true, false, "R5G6B5" },
+    { SDL_PIXELFORMAT_ARGB1555, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A1R5G5B5, 2, true, false, "A1R5G5B5" },
+    { SDL_PIXELFORMAT_ARGB1555, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_X1R5G5B5, 2, true, false, "X1R5G5B5" },
+    { SDL_PIXELFORMAT_ARGB4444, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A4R4G4B4, 2, true, false, "A4R4G4B4" }, 
 
     // linear unsigned
-    { SDL_PIXELFORMAT_ABGR8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8B8G8R8, false, false, "A8B8G8R8" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_R8G8B8A8, false, false, "R8G8B8A8" },
-    { SDL_PIXELFORMAT_ARGB8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8R8G8B8, false, false, "A8R8G8B8" },   
-    { SDL_PIXELFORMAT_ARGB8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X8R8G8B8, false, false, "X8R8G8B8" },
-    { SDL_PIXELFORMAT_BGRA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_B8G8R8A8, false, false, "B8G8R8A8" },
-    { SDL_PIXELFORMAT_RGB565, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_R5G6B5, false, false, "R5G6B5" },
-    { SDL_PIXELFORMAT_ARGB1555, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A1R5G5B5, false, false, "A1R5G5B5" },
-    { SDL_PIXELFORMAT_ARGB1555, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X1R5G5B5, false, false, "X1R5G5B5" },
-    { SDL_PIXELFORMAT_ARGB4444, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A4R4G4B4, false, false, "A4R4G4B4" },
-
-    // TODO: for some that need conversion, can probably use rgba and just see if both xemu and hardware display the same garbage
+    { SDL_PIXELFORMAT_ABGR8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8B8G8R8, 4, false, false, "A8B8G8R8" },
+    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_R8G8B8A8, 4, false, false, "R8G8B8A8" },
+    { SDL_PIXELFORMAT_ARGB8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A8R8G8B8, 4, false, false, "A8R8G8B8" },   
+    { SDL_PIXELFORMAT_ARGB8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X8R8G8B8, 4, false, false, "X8R8G8B8" },
+    { SDL_PIXELFORMAT_BGRA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_B8G8R8A8, 4, false, false, "B8G8R8A8" },
+    { SDL_PIXELFORMAT_RGB565, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_R5G6B5, 2, false, false, "R5G6B5" },
+    { SDL_PIXELFORMAT_ARGB1555, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A1R5G5B5, 2, false, false, "A1R5G5B5" },
+    { SDL_PIXELFORMAT_ARGB1555, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_X1R5G5B5, 2, false, false, "X1R5G5B5" },
+    { SDL_PIXELFORMAT_ARGB4444, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_A4R4G4B4, 2, false, false, "A4R4G4B4" },
 
     // yuv color space
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_CR8YB8CB8YA8, false, true, "YUY2" },
-    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_YB8CR8YA8CB8, false, true, "UYVY" },  // TODO: implement in xemu
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_Y16, false, true, "Y16" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_Y8, true, true, "SZ_Y8" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_Y8, false, true, "Y8" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_AY8, true, true, "SZ_AY8" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_AY8, false, true, "AY8" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8, true, true, "SZ_A8" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8Y8, true, true, "SZ_A8Y8" },
+    // Each 4 bytes represent the color for 2 neighboring pixels:
+    // [ U0 | Y0 | V0 | Y1 ]
+    // Y0 is the brightness of pixel 0, Y1 the brightness of pixel 1.
+    // U0 and V0 is the color of both pixels. (second pixel is the one sampled? or averaged? doesn't really matter here)
+    // https://docs.microsoft.com/en-us/windows/win32/medfound/recommended-8-bit-yuv-formats-for-video-rendering#converting-8-bit-yuv-to-rgb888
+    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_CR8YB8CB8YA8, 2, false, true, "YUY2" },
+    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_YB8CR8YA8CB8, 2, false, true, "UYVY" }, // TODO: implement in xemu
+
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_Y16, false, true, "Y16" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_Y8, true, true, "SZ_Y8" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_Y8, false, true, "Y8" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_AY8, true, true, "SZ_AY8" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_AY8, false, true, "AY8" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8, true, true, "SZ_A8" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_A8Y8, true, true, "SZ_A8Y8" },
     
     // misc formats
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT1_A1R5G5B5, false, true, "DXT1" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT23_A8R8G8B8, false, true, "DXT3" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT45_A8R8G8B8, false, true, "DXT5" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_G8B8, true, true, "SZ_G8B8" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT1_A1R5G5B5, false, true, "DXT1" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT23_A8R8G8B8, false, true, "DXT3" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_L_DXT45_A8R8G8B8, false, true, "DXT5" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_G8B8, true, true, "SZ_G8B8" },
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_G8B8, false, true, "G8B8" },    // TODO: implement in xemu
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_D16, false, true, "D16" },    // TODO: implement in xemu
     //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_LIN_F16, false, true, "LIN_F16" },    // TODO: implement in xemu
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R8B8, true, true, "SZ_R8B8" },
-    { SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R6G5B5, true, true, "R6G5B5" }
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R8B8, true, true, "SZ_R8B8" },
+    //{ SDL_PIXELFORMAT_RGBA8888, NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R6G5B5, true, true, "R6G5B5" }
+
     // TODO: define others here
 };
 
@@ -137,77 +132,19 @@ int bsf(int val) {
     __asm bsf eax, val
 }
 
-int update_texture_memory(SDL_PixelFormatEnum format, int width, int height, bool swizzled)
-{
-    // create source surface
-    SDL_Surface *gradient_surf = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_RGBA8888);
-    if (gradient_surf == NULL)
-        return 1;
-
-    if (SDL_LockSurface(gradient_surf))
-        return 2;
-
-    // generate basic gradient pattern
-    uint32_t *pixels = (uint32_t*)gradient_surf->pixels;
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int xScale = x * 255.0f / width;
-            int yScale = y * 255.0f / height;
-            pixels[y * width + x] = SDL_MapRGB(gradient_surf->format, yScale, xScale, yScale);
-        }
-    }
-
-    SDL_UnlockSurface(gradient_surf);
-
-    // convert to desired destination format
-    SDL_Surface *new_surf = SDL_ConvertSurfaceFormat(gradient_surf, format, 0);
-    if (!new_surf)
-        return 3;
-
-    SDL_FreeSurface(gradient_surf);
-    if (texture.addr)
-        MmFreeContiguousMemory(texture.addr);
-
-    // TODO: texture conversions if necessary, will need to pass in additional argument(s)
-
-    // allocate texture memory
-    uint8_t *dst_tex_buf = MmAllocateContiguousMemoryEx(height * new_surf->pitch, 0, MAXRAM, 0, PAGE_WRITECOMBINE | PAGE_READWRITE);
-    if (!dst_tex_buf) {
-        SDL_FreeSurface(new_surf);
-        return 4;
-    }
-
-    // copy pixels over to texture memory, swizzling if desired
-    if (swizzled) {
-        swizzle_rect((uint8_t*)new_surf->pixels, new_surf->w, new_surf->h, dst_tex_buf, new_surf->pitch, new_surf->format->BytesPerPixel);
-    } else {
-        memcpy(dst_tex_buf, new_surf->pixels, new_surf->pitch * new_surf->h);
-    }
-
-    // HACK: update global texture info
-    texture.width = new_surf->w;
-    texture.height = new_surf->h;
-    texture.pitch = new_surf->pitch;
-    texture.addr = dst_tex_buf;
-
-    SDL_FreeSurface(new_surf);
-
-    return 0;
-}
-
-SDL_GameController *gameController;
-
 /* Main program function */
 int main(void)
 {
     uint32_t *p;
     int       i, status;
-    int       width, height;
+    int       width = 640, height = 480;
     float     m_viewport[4][4];
     int format_map_index = 0;
     bool toggleFormat;
+    int texWidth = 256, texHeight = 256;
+    SDL_GameController *gameController;
 
-    XVideoSetMode(640, 480, 32, REFRESH_DEFAULT);
+    XVideoSetMode(width, height, 32, REFRESH_DEFAULT);
 
     // initialize input for the first gamepad
     SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
@@ -226,10 +163,6 @@ int main(void)
 
     pb_show_front_screen();
 
-    /* Basic setup */
-    width = pb_back_buffer_width();
-    height = pb_back_buffer_height();
-
     /* Load constant rendering things (shaders, geometry) */
     init_shader();
 
@@ -240,10 +173,13 @@ int main(void)
     memcpy(alloc_vertices_swizzled, vertices, sizeof(vertices));
     num_vertices = sizeof(vertices)/sizeof(vertices[0]);
     for (int i = 0; i < num_vertices; i++) {
-        // TODO: programmatic generation of buffers to support variable non-square sizes
-        if (alloc_vertices[i].texcoord[0]) alloc_vertices[i].texcoord[0] = 256.0f;
-        if (alloc_vertices[i].texcoord[1]) alloc_vertices[i].texcoord[1] = 256.0f;
+        if (alloc_vertices[i].texcoord[0]) alloc_vertices[i].texcoord[0] = texWidth * 1.0f;
+        if (alloc_vertices[i].texcoord[1]) alloc_vertices[i].texcoord[1] = texHeight * 1.0f;
     }
+
+    // allocate texture memory buffer large enough for all types
+    void *texMem = MmAllocateContiguousMemoryEx(texWidth * texHeight * 4, 0, MAXRAM, 0, PAGE_WRITECOMBINE | PAGE_READWRITE);
+    int texError = update_texture_memory(texMem, format_map[format_map_index], texWidth, texHeight);
 
     /* Create view matrix (our camera is static) */
     matrix_unit(m_view);
@@ -268,7 +204,9 @@ int main(void)
         bool bPress = SDL_GameControllerGetButton(gameController, SDL_CONTROLLER_BUTTON_B);
         if (aPress || bPress) {
             if (toggleFormat) {
+                // TODO: back doesn't wrap as intended, re-do logic
                 format_map_index = (format_map_index + (aPress ? 1 : -1)) % (sizeof(format_map) / sizeof(format_map[0]));
+                texError = update_texture_memory(texMem, format_map[format_map_index], texWidth, texHeight);
             }
             toggleFormat = false;
         } else toggleFormat = true;
@@ -279,7 +217,7 @@ int main(void)
 
         /* Clear depth & stencil buffers */
         pb_erase_depth_stencil_buffer(0, 0, width, height);
-        pb_fill(0, 0, width, height, 0xff202020);
+        pb_fill(0, 0, width, height, 0xff000000);
         pb_erase_text_screen();
 
         while(pb_busy()) {
@@ -298,20 +236,26 @@ int main(void)
         p = pb_push1(p, NV097_SET_FRONT_FACE, NV097_SET_FRONT_FACE_V_CCW);
         p = pb_push1(p, NV097_SET_DEPTH_TEST_ENABLE, true);
 
-        texture.error = update_texture_memory(format_map[format_map_index].SdlFormat, 256, 256, format_map[format_map_index].XboxSwizzled);
+        // Enable alpha blending functionality
+        p = pb_push1(p, NV097_SET_BLEND_ENABLE, true);
+
+        // Set the alpha blend source (s) and destination (d) factors
+        p = pb_push1(p, NV097_SET_BLEND_FUNC_SFACTOR, NV097_SET_BLEND_FUNC_SFACTOR_V_SRC_ALPHA);
+        p = pb_push1(p, NV097_SET_BLEND_FUNC_DFACTOR, NV097_SET_BLEND_FUNC_SFACTOR_V_ONE_MINUS_SRC_ALPHA);
+
         DWORD format_mask = MASK(NV097_SET_TEXTURE_FORMAT_CONTEXT_DMA, 1) |
             MASK(NV097_SET_TEXTURE_FORMAT_CUBEMAP_ENABLE, 0) |
             MASK(NV097_SET_TEXTURE_FORMAT_BORDER_SOURCE, NV097_SET_TEXTURE_FORMAT_BORDER_SOURCE_COLOR) |
             MASK(NV097_SET_TEXTURE_FORMAT_DIMENSIONALITY, 2) |
             MASK(NV097_SET_TEXTURE_FORMAT_COLOR, format_map[format_map_index].XboxFormat) |
             MASK(NV097_SET_TEXTURE_FORMAT_MIPMAP_LEVELS, 1) |
-            MASK(NV097_SET_TEXTURE_FORMAT_BASE_SIZE_U, format_map[format_map_index].XboxSwizzled ? bsf(texture.width) : 0) |
-            MASK(NV097_SET_TEXTURE_FORMAT_BASE_SIZE_V, format_map[format_map_index].XboxSwizzled ? bsf(texture.height) : 0) |
+            MASK(NV097_SET_TEXTURE_FORMAT_BASE_SIZE_U, format_map[format_map_index].XboxSwizzled ? bsf(texWidth) : 0) |
+            MASK(NV097_SET_TEXTURE_FORMAT_BASE_SIZE_V, format_map[format_map_index].XboxSwizzled ? bsf(texHeight) : 0) |
             MASK(NV097_SET_TEXTURE_FORMAT_BASE_SIZE_P, 0);
-        p = pb_push2(p,NV20_TCL_PRIMITIVE_3D_TX_OFFSET(0),(DWORD)texture.addr & 0x03ffffff,format_mask); //set stage 0 texture address & format
+        p = pb_push2(p,NV20_TCL_PRIMITIVE_3D_TX_OFFSET(0),(DWORD)texMem & 0x03ffffff,format_mask); //set stage 0 texture address & format
         if (!format_map[format_map_index].XboxSwizzled) {
-            p = pb_push1(p,NV20_TCL_PRIMITIVE_3D_TX_NPOT_PITCH(0),texture.pitch<<16); //set stage 0 texture pitch (pitch<<16)
-            p = pb_push1(p,NV20_TCL_PRIMITIVE_3D_TX_NPOT_SIZE(0),(texture.width<<16)|texture.height); //set stage 0 texture width & height ((witdh<<16)|height)
+            p = pb_push1(p,NV20_TCL_PRIMITIVE_3D_TX_NPOT_PITCH(0),(format_map[format_map_index].XboxBpp * texWidth)<<16); //set stage 0 texture pitch (pitch<<16)
+            p = pb_push1(p,NV20_TCL_PRIMITIVE_3D_TX_NPOT_SIZE(0),(texWidth<<16)|texHeight); //set stage 0 texture width & height ((witdh<<16)|height)
         }
         p = pb_push1(p,NV20_TCL_PRIMITIVE_3D_TX_WRAP(0),0x00030303);//set stage 0 texture modes (0x0W0V0U wrapping: 1=wrap 2=mirror 3=clamp 4=border 5=clamp to edge)
         p = pb_push1(p,NV20_TCL_PRIMITIVE_3D_TX_ENABLE(0),0x4003ffc0); //set stage 0 texture enable flags
@@ -401,10 +345,10 @@ int main(void)
         pb_print("F: 0x%x\n", format_map[format_map_index].XboxFormat);
         pb_print("SZ: %d\n", format_map[format_map_index].XboxSwizzled);
         pb_print("C: %d\n", format_map[format_map_index].RequireConversion);
-        pb_print("W: %d\n", texture.width);
-        pb_print("H: %d\n", texture.height);
-        pb_print("P: %d\n", texture.pitch);
-        pb_print("ERR: %d\n", texture.error);
+        pb_print("W: %d\n", texWidth);
+        pb_print("H: %d\n", texHeight);
+        pb_print("P: %d\n", format_map[format_map_index].XboxBpp * texWidth);
+        pb_print("ERR: %d\n", texError);
         pb_draw_text_screen();
 
         while(pb_busy()) {
@@ -421,9 +365,96 @@ int main(void)
     SDL_GameControllerClose(gameController);
     SDL_QuitSubSystem(SDL_INIT_GAMECONTROLLER);
     MmFreeContiguousMemory(alloc_vertices);
-    MmFreeContiguousMemory(texture.addr);
+    MmFreeContiguousMemory(alloc_vertices_swizzled);
+    MmFreeContiguousMemory(texMem);
     pb_show_debug_screen();
     pb_kill();
+    return 0;
+}
+
+
+static int update_texture_memory(void *texMem, TextureFormatInfo format, int width, int height)
+{
+    // create source surface
+    SDL_Surface *gradient_surf = SDL_CreateRGBSurfaceWithFormat(0, width, height, 32, SDL_PIXELFORMAT_RGBA8888);
+    if (gradient_surf == NULL)
+        return 1;
+
+    if (SDL_LockSurface(gradient_surf))
+        return 2;
+
+    // TODO: have different color patterns controlled by alternate gamepad button(s)
+    // generate basic gradient pattern
+    uint32_t *pixels = gradient_surf->pixels;
+    for (int y = 0; y < height; y++) 
+    for (int x = 0; x < width; x++) {
+        int xNorm = x * 255.0f / width;
+        int yNorm = y * 255.0f / height;
+        pixels[y * width + x] = SDL_MapRGBA(gradient_surf->format, yNorm, xNorm, 255 - yNorm, xNorm  + yNorm);
+    }
+
+    SDL_UnlockSurface(gradient_surf);
+
+    // if conversion required, do so, otherwise use SDL to convert
+    if (format.RequireConversion) {
+        uint8_t *dstP = (uint8_t*)texMem;
+
+        // TODO: potential reference material - https://github.com/scalablecory/colors/blob/master/color.c
+        switch (format.XboxFormat) {
+            case NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_CR8YB8CB8YA8: // YUY2 aka YUYV
+                for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x += 2) {
+                    uint8_t R0, G0, B0, R1, G1, B1;
+                    SDL_GetRGB(pixels[y * width + x], gradient_surf->format, &R0, &G0, &B0);
+                    SDL_GetRGB(pixels[y * width + x + 1], gradient_surf->format, &R1, &G1, &B1);
+                    dstP[0] = (0.257f * R0) + (0.504f * G0) + (0.098f * B0) + 16;    // Y0
+                    dstP[1] = -(0.148f * R1) - (0.291f * G1) + (0.439f * B1) + 128;  // U
+                    dstP[2] = (0.257f * R1) + (0.504f * G1) + (0.098f * B1) + 16;    // Y1
+                    dstP[3] = (0.439f * R1) - (0.368f * G1) - (0.071f * B1) + 128;   // V
+                    dstP += 4;
+                }
+                break;
+            case NV097_SET_TEXTURE_FORMAT_COLOR_LC_IMAGE_YB8CR8YA8CB8:  // UYVY
+                for (int y = 0; y < height; y++)
+                for (int x = 0; x < width; x += 2) {
+                    uint8_t R0, G0, B0, R1, G1, B1;
+                    SDL_GetRGB(pixels[y * width + x], gradient_surf->format, &R0, &G0, &B0);
+                    SDL_GetRGB(pixels[y * width + x + 1], gradient_surf->format, &R1, &G1, &B1);
+                    dstP[0] = -(0.148f * R1) - (0.291f * G1) + (0.439f * B1) + 128;  // U
+                    dstP[1] = (0.257f * R0) + (0.504f * G0) + (0.098f * B0) + 16;    // Y0
+                    dstP[2] = (0.439f * R1) - (0.368f * G1) - (0.071f * B1) + 128;   // V
+                    dstP[3] = (0.257f * R1) + (0.504f * G1) + (0.098f * B1) + 16;    // Y1
+                    dstP += 4;
+                }
+            break;
+
+            default:
+                SDL_FreeSurface(gradient_surf);
+                return 3;
+            break;
+        }
+
+        // TODO: swizzling
+
+        SDL_FreeSurface(gradient_surf);
+    } else {
+
+        // standard SDL conversion to destination format
+        SDL_Surface *new_surf = SDL_ConvertSurfaceFormat(gradient_surf, format.SdlFormat, 0);
+        SDL_FreeSurface(gradient_surf);
+        if (!new_surf)
+            return 4;
+
+        // copy pixels over to texture memory, swizzling if desired
+        if (format.XboxSwizzled) {
+            swizzle_rect((uint8_t*)new_surf->pixels, new_surf->w, new_surf->h, texMem, new_surf->pitch, new_surf->format->BytesPerPixel);
+        } else {
+            memcpy(texMem, new_surf->pixels, new_surf->pitch * new_surf->h);
+        }
+
+        SDL_FreeSurface(new_surf);
+    }
+
     return 0;
 }
 
